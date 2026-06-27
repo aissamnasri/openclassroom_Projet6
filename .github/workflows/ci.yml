@@ -8,6 +8,24 @@ on:
       - test-ci
   pull_request:
 
+  # Déclenchement manuel depuis l'onglet "Actions" de GitHub
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Job(s) à exécuter"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all       # test → release (si main) → build
+          - test      # tests uniquement
+          - build     # build Docker uniquement (sans re-tester)
+      force_release:
+        description: "Forcer semantic-release même hors de main ?"
+        required: false
+        default: false
+        type: boolean
+
 permissions:
   contents: write
   packages: write
@@ -18,6 +36,8 @@ jobs:
   # Détecte le type de projet et exécute les tests
   # ============================================================
   test:
+    # En manuel : tourne si job == 'all' ou job == 'test' (ou si déclenché automatiquement)
+    if: github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'test'
     runs-on: ubuntu-latest
     outputs:
       project_type: ${{ steps.detect.outputs.type }}
@@ -96,7 +116,15 @@ jobs:
   # ============================================================
   release:
     needs: test
-    if: github.ref == 'refs/heads/main'
+    # En automatique : main uniquement
+    # En manuel     : main OU force_release activé
+    if: |
+      always() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (
+        github.ref == 'refs/heads/main' ||
+        (github.event_name == 'workflow_dispatch' && inputs.force_release == true)
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -137,8 +165,13 @@ jobs:
       - test
       - release
     # always() permet de continuer même si release est skippé (develop, test-ci)
-    # On bloque uniquement si test a échoué
-    if: always() && needs.test.result == 'success'
+    # En manuel avec job == 'build' : on saute test et release, on builde directement
+    if: |
+      always() &&
+      (
+        (needs.test.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && inputs.job == 'build')
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
